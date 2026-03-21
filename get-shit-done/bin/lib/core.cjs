@@ -112,6 +112,40 @@ function findProjectRoot(startDir) {
 
 // ─── Output helpers ───────────────────────────────────────────────────────────
 
+/**
+ * Remove stale gsd-* temp files/dirs older than maxAgeMs (default: 5 minutes).
+ * Runs opportunistically before each new temp file write to prevent unbounded accumulation.
+ * @param {string} prefix - filename prefix to match (e.g., 'gsd-')
+ * @param {object} opts
+ * @param {number} opts.maxAgeMs - max age in ms before removal (default: 5 min)
+ * @param {boolean} opts.dirsOnly - if true, only remove directories (default: false)
+ */
+function reapStaleTempFiles(prefix = 'gsd-', { maxAgeMs = 5 * 60 * 1000, dirsOnly = false } = {}) {
+  try {
+    const tmpDir = require('os').tmpdir();
+    const now = Date.now();
+    const entries = fs.readdirSync(tmpDir);
+    for (const entry of entries) {
+      if (!entry.startsWith(prefix)) continue;
+      const fullPath = path.join(tmpDir, entry);
+      try {
+        const stat = fs.statSync(fullPath);
+        if (now - stat.mtimeMs > maxAgeMs) {
+          if (stat.isDirectory()) {
+            fs.rmSync(fullPath, { recursive: true, force: true });
+          } else if (!dirsOnly) {
+            fs.unlinkSync(fullPath);
+          }
+        }
+      } catch {
+        // File may have been removed between readdir and stat — ignore
+      }
+    }
+  } catch {
+    // Non-critical — don't let cleanup failures break output
+  }
+}
+
 function output(result, raw, rawValue) {
   if (raw && rawValue !== undefined) {
     process.stdout.write(String(rawValue));
@@ -120,6 +154,7 @@ function output(result, raw, rawValue) {
     // Large payloads exceed Claude Code's Bash tool buffer (~50KB).
     // Write to tmpfile and output the path prefixed with @file: so callers can detect it.
     if (json.length > 50000) {
+      reapStaleTempFiles();
       const tmpPath = path.join(require('os').tmpdir(), `gsd-${Date.now()}.json`);
       fs.writeFileSync(tmpPath, json, 'utf-8');
       process.stdout.write('@file:' + tmpPath);
@@ -161,6 +196,8 @@ function loadConfig(cwd) {
     nyquist_validation: true,
     parallelization: true,
     brave_search: false,
+    firecrawl: false,
+    exa_search: false,
     text_mode: false, // when true, use plain-text numbered lists instead of AskUserQuestion menus
     sub_repos: [],
     resolve_model_ids: false, // when true, resolve aliases (opus/sonnet/haiku) to full model IDs
@@ -230,7 +267,15 @@ function loadConfig(cwd) {
 
     return {
       model_profile: get('model_profile') ?? defaults.model_profile,
-      commit_docs: get('commit_docs', { section: 'planning', field: 'commit_docs' }) ?? defaults.commit_docs,
+      commit_docs: (() => {
+        const explicit = get('commit_docs', { section: 'planning', field: 'commit_docs' });
+        // If explicitly set in config, respect the user's choice
+        if (explicit !== undefined) return explicit;
+        // Auto-detection: when no explicit value and .planning/ is gitignored,
+        // default to false instead of true
+        if (isGitIgnored(cwd, '.planning/')) return false;
+        return defaults.commit_docs;
+      })(),
       search_gitignored: get('search_gitignored', { section: 'planning', field: 'search_gitignored' }) ?? defaults.search_gitignored,
       branching_strategy: get('branching_strategy', { section: 'git', field: 'branching_strategy' }) ?? defaults.branching_strategy,
       phase_branch_template: get('phase_branch_template', { section: 'git', field: 'phase_branch_template' }) ?? defaults.phase_branch_template,
@@ -242,6 +287,8 @@ function loadConfig(cwd) {
       nyquist_validation: get('nyquist_validation', { section: 'workflow', field: 'nyquist_validation' }) ?? defaults.nyquist_validation,
       parallelization,
       brave_search: get('brave_search') ?? defaults.brave_search,
+      firecrawl: get('firecrawl') ?? defaults.firecrawl,
+      exa_search: get('exa_search') ?? defaults.exa_search,
       text_mode: get('text_mode', { section: 'workflow', field: 'text_mode' }) ?? defaults.text_mode,
       sub_repos: get('sub_repos', { section: 'planning', field: 'sub_repos' }) ?? defaults.sub_repos,
       resolve_model_ids: get('resolve_model_ids') ?? defaults.resolve_model_ids,
@@ -993,6 +1040,7 @@ module.exports = {
   withPlanningLock,
   findProjectRoot,
   detectSubRepos,
+  reapStaleTempFiles,
   MODEL_ALIAS_MAP,
   planningDir,
   planningPaths,
