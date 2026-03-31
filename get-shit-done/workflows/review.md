@@ -138,7 +138,7 @@ codex exec --skip-git-repo-check "$(cat /tmp/gsd-review-prompt-{phase}.md)" 2>/d
 Note: CodeRabbit reviews the current git diff/working tree — it does not accept a prompt. It may take up to 5 minutes. Use `timeout: 360000` on the Bash tool call.
 
 ```bash
-coderabbit review 2>/dev/null > /tmp/gsd-review-coderabbit-{phase}.md
+coderabbit review --prompt-only 2>/dev/null > /tmp/gsd-review-coderabbit-{phase}.md
 ```
 
 If a CLI fails, log the error and continue with remaining CLIs.
